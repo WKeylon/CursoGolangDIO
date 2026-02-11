@@ -11,9 +11,27 @@ const (
 	RolePesquisador = "pesquisador"
 )
 
+// Áreas do Sistema
+const (
+	AreaCandidatos   = "Candidatos"
+	AreaPerguntas    = "Perguntas"
+	AreaUsuarios     = "Usuarios"
+	AreaEstatisticas = "Estatisticas"
+	AreaVotacao      = "Votacao"
+)
+
 type Cidade struct {
 	ID   uint   `gorm:"primaryKey"`
 	Nome string `gorm:"uniqueIndex"`
+}
+
+type Permissao struct {
+	gorm.Model
+	UsuarioID uint
+	Area      string // Ex: "Candidatos"
+	Ler       bool
+	Editar    bool // Criar e Atualizar
+	Deletar   bool
 }
 
 type Usuario struct {
@@ -22,13 +40,14 @@ type Usuario struct {
 	SenhaHash      string
 	Role           string
 	PrimeiroAcesso bool
-	Cidades        []Cidade `gorm:"many2many:usuario_cidades;"` // Cidades permitidas para este usuário
+	Cidades        []Cidade    `gorm:"many2many:usuario_cidades;"` // Cidades permitidas para este usuário
+	Permissoes     []Permissao `gorm:"foreignKey:UsuarioID"`
 }
 
 type Candidato struct {
 	gorm.Model
-	Nome    string
-	Partido string
+	Nome     string
+	Partido  string
 	CidadeID *uint // Opcional: Se nulo, pode ser estadual/federal
 	Cidade   *Cidade
 }

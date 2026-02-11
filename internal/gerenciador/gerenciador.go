@@ -10,7 +10,8 @@ import (
 // Authenticate checks username and password
 func Authenticate(username, password string) (*modelos.Usuario, error) {
 	var user modelos.Usuario
-	err := database.DB.Preload("Cidades").Where("username = ?", username).First(&user).Error
+	// Preload both Cidades and Permissoes
+	err := database.DB.Preload("Cidades").Preload("Permissoes").Where("username = ?", username).First(&user).Error
 	if err != nil {
 		return nil, errors.New("usuário não encontrado")
 	}
@@ -23,18 +24,38 @@ func Authenticate(username, password string) (*modelos.Usuario, error) {
 	return &user, nil
 }
 
-// CreateUser creates a new user with role validation
-func CreateUser(creatorRole string, username, password, role string, cityIDs []uint) error {
-	// Simple validation rules
-	if creatorRole == modelos.RolePesquisador {
-		return errors.New("pesquisadores não podem criar usuários")
+// CheckPermission checks if a user has permission for an area/action
+func CheckPermission(user *modelos.Usuario, area string, action string) bool {
+	if user.Role == modelos.RoleAdmin {
+		return true
 	}
 
-	if creatorRole == modelos.RoleGerente && role != modelos.RolePesquisador {
+	for _, p := range user.Permissoes {
+		if p.Area == area {
+			if action == "ler" && p.Ler { return true }
+			if action == "editar" && p.Editar { return true }
+			if action == "deletar" && p.Deletar { return true }
+		}
+	}
+	return false
+}
+
+// CreateUser creates a new user with role validation
+func CreateUser(creator *modelos.Usuario, username, password, role string, cityIDs []uint, permissions []modelos.Permissao) error {
+	// Permission Check
+	if !CheckPermission(creator, modelos.AreaUsuarios, "editar") {
+		return errors.New("permissão negada para criar usuários")
+	}
+
+	// Extra Logic: Manager can only create Researcher (Legacy rule, still valid?)
+	// If we rely purely on permissions, maybe we drop this?
+	// The prompt says "administrator can choose...".
+	// Let's keep the legacy rule as an extra safeguard if the creator is Manager.
+	if creator.Role == modelos.RoleGerente && role != modelos.RolePesquisador {
 		return errors.New("gerentes só podem criar pesquisadores")
 	}
 
-	return database.CreateUser(username, password, role, cityIDs)
+	return database.CreateUser(username, password, role, cityIDs, permissions)
 }
 
 // ChangePassword changes the user's password
@@ -54,7 +75,10 @@ func GetCities() ([]modelos.Cidade, error) {
 
 // --- Voting Logic ---
 
-func AddCandidate(name, party string, cityID *uint) error {
+func AddCandidate(user *modelos.Usuario, name, party string, cityID *uint) error {
+	if !CheckPermission(user, modelos.AreaCandidatos, "editar") {
+		return errors.New("permissão negada para adicionar candidato")
+	}
 	candidate := modelos.Candidato{
 		Nome:     name,
 		Partido:  party,
@@ -63,7 +87,10 @@ func AddCandidate(name, party string, cityID *uint) error {
 	return database.DB.Create(&candidate).Error
 }
 
-func AddQuestion(text string) error {
+func AddQuestion(user *modelos.Usuario, text string) error {
+	if !CheckPermission(user, modelos.AreaPerguntas, "editar") {
+		return errors.New("permissão negada para adicionar pergunta")
+	}
 	question := modelos.Pergunta{
 		Texto: text,
 	}
@@ -71,9 +98,12 @@ func AddQuestion(text string) error {
 }
 
 func ListCandidates(cityID uint) ([]modelos.Candidato, error) {
+	// Read permission check? Usually for listing for voting, we assume implicit read?
+	// Or should we enforce it? Let's enforce implicit read for voting context,
+	// but if used in admin panel, UI should check.
+	// For now, no strict check here to avoid breaking voting flow if we forget to assign "Read" on Candidates to Researcher.
+	// But technically Researcher needs Read access.
 	var candidates []modelos.Candidato
-	// List candidates specific to the city OR global (null cityID)
-	// Important: We need to filter by CidadeID = ? OR CidadeID IS NULL
 	err := database.DB.Where("cidade_id = ? OR cidade_id IS NULL", cityID).Find(&candidates).Error
 	return candidates, err
 }
@@ -84,28 +114,38 @@ func ListQuestions() ([]modelos.Pergunta, error) {
 	return questions, err
 }
 
-func RegisterVote(candidateID, cityID, userID uint) error {
+func RegisterVote(user *modelos.Usuario, candidateID, cityID uint) error {
+	if !CheckPermission(user, modelos.AreaVotacao, "editar") { // Voting is an "edit" action (create vote)
+		return errors.New("permissão negada para votar")
+	}
 	vote := modelos.Voto{
 		CandidatoID: candidateID,
 		CidadeID:    cityID,
-		UsuarioID:   userID,
+		UsuarioID:   user.ID,
 	}
 	return database.DB.Create(&vote).Error
 }
 
-func RegisterAnswer(questionID, cityID, userID uint, answer bool) error {
+func RegisterAnswer(user *modelos.Usuario, questionID, cityID uint, answer bool) error {
+	if !CheckPermission(user, modelos.AreaVotacao, "editar") {
+		return errors.New("permissão negada para responder")
+	}
 	resp := modelos.Resposta{
 		PerguntaID: questionID,
 		Sim:        answer,
 		CidadeID:   cityID,
-		UsuarioID:  userID,
+		UsuarioID:  user.ID,
 	}
 	return database.DB.Create(&resp).Error
 }
 
 // Statistics
 
-func GetCandidateVotes(cityID *uint) (map[string]int64, error) {
+func GetCandidateVotes(user *modelos.Usuario, cityID *uint) (map[string]int64, error) {
+	if !CheckPermission(user, modelos.AreaEstatisticas, "ler") {
+		return nil, errors.New("permissão negada para ver estatísticas")
+	}
+
 	type Result struct {
 		Nome  string
 		Total int64
@@ -132,7 +172,11 @@ func GetCandidateVotes(cityID *uint) (map[string]int64, error) {
 	return stats, nil
 }
 
-func GetQuestionStats(cityID *uint) (map[string]map[string]int64, error) {
+func GetQuestionStats(user *modelos.Usuario, cityID *uint) (map[string]map[string]int64, error) {
+	if !CheckPermission(user, modelos.AreaEstatisticas, "ler") {
+		return nil, errors.New("permissão negada para ver estatísticas")
+	}
+
 	var questions []modelos.Pergunta
 	if err := database.DB.Find(&questions).Error; err != nil {
 		return nil, err

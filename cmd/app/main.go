@@ -22,7 +22,7 @@ func main() {
 	database.InitDB()
 	myApp = app.New()
 	myWindow = myApp.NewWindow("Sistema de Pesquisa Eleitoral")
-	myWindow.Resize(fyne.NewSize(400, 700))
+	myWindow.Resize(fyne.NewSize(450, 750))
 
 	showLogin()
 
@@ -111,46 +111,54 @@ func showMainApp(user *modelos.Usuario) {
 	votacaoContent := container.NewVBox()
 	scrollVotacao := container.NewVScroll(votacaoContent)
 
-	// Aba Administração (Visível apenas para Admin e Gerente)
+	// Aba Administração (Visível apenas se tiver permissão)
 	var adminTab *container.TabItem
-	if user.Role == modelos.RoleAdmin || user.Role == modelos.RoleGerente {
+	if gerenciador.CheckPermission(user, modelos.AreaCandidatos, "editar") || gerenciador.CheckPermission(user, modelos.AreaPerguntas, "editar") {
 		adminContent := createAdminContent(user)
 		adminTab = container.NewTabItem("Administração", adminContent)
 	}
 
-	// Aba Usuários (Visível apenas para Admin e Gerente)
+	// Aba Usuários (Visível apenas se tiver permissão)
 	var usersTab *container.TabItem
-	if user.Role == modelos.RoleAdmin || user.Role == modelos.RoleGerente {
+	if gerenciador.CheckPermission(user, modelos.AreaUsuarios, "ler") || gerenciador.CheckPermission(user, modelos.AreaUsuarios, "editar") {
 		usersContent := createUsersContent(user)
 		usersTab = container.NewTabItem("Usuários", usersContent)
 	}
 
 	// Aba Estatísticas
-	estatisticasContent := container.NewVBox()
-	statsScroll := container.NewVScroll(estatisticasContent)
-	atualizarEstatisticas(estatisticasContent, nil) // Inicialmente Global
+	var statsTab *container.TabItem
+	if gerenciador.CheckPermission(user, modelos.AreaEstatisticas, "ler") {
+		estatisticasContent := container.NewVBox()
+		statsScroll := container.NewVScroll(estatisticasContent)
+		atualizarEstatisticas(user, estatisticasContent, nil)
 
-	// Se pesquisador, deve selecionar cidade antes de votar.
+		statsTab = container.NewTabItem("Estatísticas", container.NewBorder(
+			widget.NewButton("Atualizar Global", func() { atualizarEstatisticas(user, estatisticasContent, nil) }),
+			nil, nil, nil,
+			statsScroll,
+		))
+	}
+
+	// Se pesquisador/votante, update screen
 	updateVotingScreen(user, votacaoContent)
 
 	// Configurar Abas
-	var tabs *container.AppTabs
+	tabs := container.NewAppTabs()
 
-	statsTab := container.NewTabItem("Estatísticas", container.NewBorder(
-		widget.NewButton("Atualizar Global", func() { atualizarEstatisticas(estatisticasContent, nil) }),
-		nil, nil, nil,
-		statsScroll,
-	))
+	// Adiciona abas conforme permissão
+	// Votação: Se tiver permissão de editar (votar)
+	if gerenciador.CheckPermission(user, modelos.AreaVotacao, "editar") {
+		tabs.Append(container.NewTabItem("Votação", scrollVotacao))
+	}
 
-	votingTab := container.NewTabItem("Votação", scrollVotacao)
-
-	if user.Role == modelos.RoleAdmin {
-		tabs = container.NewAppTabs(votingTab, statsTab, adminTab, usersTab)
-	} else if user.Role == modelos.RoleGerente {
-		tabs = container.NewAppTabs(votingTab, statsTab, adminTab, usersTab)
-	} else {
-		// Pesquisador: Votação apenas
-		tabs = container.NewAppTabs(votingTab)
+	if statsTab != nil {
+		tabs.Append(statsTab)
+	}
+	if adminTab != nil {
+		tabs.Append(adminTab)
+	}
+	if usersTab != nil {
+		tabs.Append(usersTab)
 	}
 
 	logoutBtn := widget.NewButton("Sair", func() {
@@ -177,14 +185,15 @@ func showMainApp(user *modelos.Usuario) {
 func updateVotingScreen(user *modelos.Usuario, content *fyne.Container) {
 	content.Objects = nil
 
+	if !gerenciador.CheckPermission(user, modelos.AreaVotacao, "editar") {
+		content.Add(widget.NewLabel("Você não tem permissão para votar."))
+		content.Refresh()
+		return
+	}
+
 	// Mapa de Cidades permitidas
 	cityMap := make(map[string]uint)
 	cityOptions := []string{}
-
-	// Se for Pesquisador, usa apenas as cidades atribuídas
-	// Se for Admin/Gerente, pode ver todas?
-	// O prompt diz: "pesquisador este tem acesso apenas as pesquisas destinadas a sua cidade"
-	// Vamos assumir que Admin/Gerente podem selecionar qualquer cidade para TESTAR o voto, ou ver estatísticas.
 
 	if user.Role == modelos.RoleAdmin || user.Role == modelos.RoleGerente {
 		cities, _ := gerenciador.GetCities()
@@ -210,7 +219,7 @@ func updateVotingScreen(user *modelos.Usuario, content *fyne.Container) {
 
 	citySelect := widget.NewSelect(cityOptions, func(s string) {
 		selectedCityID = cityMap[s]
-		loadVotingForm(selectedCityID, user.ID, content)
+		loadVotingForm(user, selectedCityID, content)
 	})
 
 	content.Add(selectLabel)
@@ -223,16 +232,8 @@ func updateVotingScreen(user *modelos.Usuario, content *fyne.Container) {
 	content.Refresh()
 }
 
-func loadVotingForm(cityID, userID uint, content *fyne.Container) {
-	// Preserva os dois primeiros widgets (Label e Select)
-	// Mas como o Select chama essa função, se deletarmos tudo, o select some.
-	// Melhor limpar do índice 2 em diante.
-
-	// Hack: Recriar o container interno para o form
-	// Mas o 'content' passado é o VBox principal da aba.
-	// Vamos remover itens > 1 (Label=0, Select=1)
-
-	// Remove objects safely
+func loadVotingForm(user *modelos.Usuario, cityID uint, content *fyne.Container) {
+	// Remove objects safely (Keep first 2: Label + Select)
 	if len(content.Objects) > 2 {
 		content.Objects = content.Objects[:2]
 	}
@@ -264,7 +265,7 @@ func loadVotingForm(cityID, userID uint, content *fyne.Container) {
 		content.Add(widget.NewLabelWithStyle("Perguntas", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
 
 		questions, _ := gerenciador.ListQuestions()
-		respostas := make(map[uint]bool) // PerguntaID -> Resposta (Sim=true)
+		respostas := make(map[uint]bool)
 
 		for _, p := range questions {
 			pID := p.ID
@@ -286,26 +287,23 @@ func loadVotingForm(cityID, userID uint, content *fyne.Container) {
 				return
 			}
 
-			// Validação opcional: Todas as perguntas respondidas?
 			if len(respostas) < len(questions) {
 				dialog.ShowInformation("Atenção", "Responda todas as perguntas.", myWindow)
 				return
 			}
 
 			candID := candidatosMap[sel]
-			if err := gerenciador.RegisterVote(candID, cityID, userID); err != nil {
+			if err := gerenciador.RegisterVote(user, candID, cityID); err != nil {
 				dialog.ShowError(err, myWindow)
 				return
 			}
 
 			for pID, resp := range respostas {
-				gerenciador.RegisterAnswer(pID, cityID, userID, resp)
+				gerenciador.RegisterAnswer(user, pID, cityID, resp)
 			}
 
 			dialog.ShowInformation("Sucesso", "Voto registrado!", myWindow)
-
-			// Resetar form (recarrega)
-			loadVotingForm(cityID, userID, content)
+			loadVotingForm(user, cityID, content)
 		})
 
 		content.Add(widget.NewSeparator())
@@ -321,7 +319,6 @@ func createAdminContent(user *modelos.Usuario) *fyne.Container {
 	partidoEntry := widget.NewEntry()
 	partidoEntry.SetPlaceHolder("Partido")
 
-	// Seleção de Cidade para o Candidato
 	cities, _ := gerenciador.GetCities()
 	cityOptions := []string{"Global (Todas as Cidades)"}
 	cityIDMap := make(map[string]*uint)
@@ -341,7 +338,7 @@ func createAdminContent(user *modelos.Usuario) *fyne.Container {
 			selectedCity := citySelect.Selected
 			cID := cityIDMap[selectedCity] // nil se vazio ou Global
 
-			err := gerenciador.AddCandidate(nomeEntry.Text, partidoEntry.Text, cID)
+			err := gerenciador.AddCandidate(user, nomeEntry.Text, partidoEntry.Text, cID)
 			if err != nil {
 				dialog.ShowError(err, myWindow)
 			} else {
@@ -355,15 +352,27 @@ func createAdminContent(user *modelos.Usuario) *fyne.Container {
 		}
 	})
 
+	if !gerenciador.CheckPermission(user, modelos.AreaCandidatos, "editar") {
+		addCandidatoBtn.Disable()
+	}
+
 	perguntaEntry := widget.NewEntry()
 	perguntaEntry.SetPlaceHolder("Texto da Pergunta")
 	addPerguntaBtn := widget.NewButton("Salvar Pergunta", func() {
 		if perguntaEntry.Text != "" {
-			gerenciador.AddQuestion(perguntaEntry.Text)
-			dialog.ShowInformation("Sucesso", "Pergunta adicionada", myWindow)
-			perguntaEntry.SetText("")
+			err := gerenciador.AddQuestion(user, perguntaEntry.Text)
+			if err != nil {
+				dialog.ShowError(err, myWindow)
+			} else {
+				dialog.ShowInformation("Sucesso", "Pergunta adicionada", myWindow)
+				perguntaEntry.SetText("")
+			}
 		}
 	})
+
+	if !gerenciador.CheckPermission(user, modelos.AreaPerguntas, "editar") {
+		addPerguntaBtn.Disable()
+	}
 
 	return container.NewVBox(
 		widget.NewLabelWithStyle("Adicionar Candidato", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -385,18 +394,15 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 	passwordEntry := widget.NewPasswordEntry()
 	passwordEntry.SetPlaceHolder("Senha Inicial")
 
-	// Role Selection
 	roleSelect := widget.NewSelect([]string{}, nil)
 	if user.Role == modelos.RoleAdmin {
 		roleSelect.Options = []string{modelos.RoleAdmin, modelos.RoleGerente, modelos.RolePesquisador}
 	} else {
-		// Gerente só cria pesquisador
 		roleSelect.Options = []string{modelos.RolePesquisador}
 		roleSelect.SetSelected(modelos.RolePesquisador)
 	}
 
 	// City Multi-Selection
-	// Fyne doesn't have a multi-select widget natively easily, so we use Checkboxes in a scroll container
 	cities, _ := gerenciador.GetCities()
 	selectedCities := make(map[uint]bool)
 
@@ -409,7 +415,32 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 		cityChecks.Add(check)
 	}
 	cityScroll := container.NewVScroll(cityChecks)
-	cityScroll.SetMinSize(fyne.NewSize(0, 150))
+	cityScroll.SetMinSize(fyne.NewSize(0, 100))
+
+	// Permission Matrix
+	areas := []string{modelos.AreaCandidatos, modelos.AreaPerguntas, modelos.AreaUsuarios, modelos.AreaEstatisticas, modelos.AreaVotacao}
+	permMap := make(map[string]map[string]bool) // Area -> Action -> bool
+
+	permContainer := container.NewVBox(widget.NewLabelWithStyle("Permissões", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+
+	for _, area := range areas {
+		area := area // Capture loop variable
+		permMap[area] = make(map[string]bool)
+
+		lbl := widget.NewLabel(area)
+		chkLer := widget.NewCheck("Ler", func(b bool) { permMap[area]["ler"] = b })
+		chkEdit := widget.NewCheck("Editar", func(b bool) { permMap[area]["editar"] = b })
+		chkDel := widget.NewCheck("Deletar", func(b bool) { permMap[area]["deletar"] = b })
+
+		// Default checks for convenience?
+		if area == modelos.AreaVotacao {
+			chkEdit.SetChecked(true)
+			permMap[area]["editar"] = true
+		} // Default voter
+
+		row := container.NewHBox(lbl, layout.NewSpacer(), chkLer, chkEdit, chkDel)
+		permContainer.Add(row)
+	}
 
 	addUserBtn := widget.NewButton("Criar Usuário", func() {
 		if usernameEntry.Text == "" || passwordEntry.Text == "" || roleSelect.Selected == "" {
@@ -425,38 +456,45 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 			}
 		}
 
-		err := gerenciador.CreateUser(user.Role, usernameEntry.Text, passwordEntry.Text, roleSelect.Selected, cityIDs)
+		// Collect Permissions
+		var permissions []modelos.Permissao
+		for area, actions := range permMap {
+			if actions["ler"] || actions["editar"] || actions["deletar"] {
+				permissions = append(permissions, modelos.Permissao{
+					Area:    area,
+					Ler:     actions["ler"],
+					Editar:  actions["editar"],
+					Deletar: actions["deletar"],
+				})
+			}
+		}
+
+		err := gerenciador.CreateUser(user, usernameEntry.Text, passwordEntry.Text, roleSelect.Selected, cityIDs, permissions)
 		if err != nil {
 			dialog.ShowError(err, myWindow)
 		} else {
 			dialog.ShowInformation("Sucesso", "Usuário criado com sucesso!", myWindow)
 			usernameEntry.SetText("")
 			passwordEntry.SetText("")
-			// Limpar checkboxes (manual refresh needed usually)
+			// Limpar checkboxes (TODO: Reset manual)
 		}
 	})
 
-	// Lista de usuários
-	listContainer := container.NewVBox()
+	if !gerenciador.CheckPermission(user, modelos.AreaUsuarios, "editar") {
+		addUserBtn.Disable()
+	}
 
+	listContainer := container.NewVBox()
 	refreshBtn := widget.NewButton("Atualizar Lista", func() {
 		listContainer.Objects = nil
 		users, _ := gerenciador.ListUsers()
 		for _, u := range users {
-			cidadesStr := ""
-			if len(u.Cidades) > 0 {
-				cidadesStr = fmt.Sprintf("%d cidades", len(u.Cidades))
-			} else {
-				cidadesStr = "Nenhuma"
-			}
+			cidadesStr := fmt.Sprintf("%d cidades", len(u.Cidades))
 			label := widget.NewLabel(fmt.Sprintf("%s [%s] - %s", u.Username, u.Role, cidadesStr))
 			listContainer.Add(label)
 		}
 		listContainer.Refresh()
 	})
-
-	// Auto-load list
-	// We can't auto-click the button here easily without goroutines or lifecycle, let's just show the button.
 
 	return container.NewVBox(
 		widget.NewLabelWithStyle("Novo Usuário", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -466,6 +504,7 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 		roleSelect,
 		widget.NewLabel("Cidades Permitidas:"),
 		cityScroll,
+		permContainer,
 		addUserBtn,
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Usuários Existentes", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -474,11 +513,17 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 	)
 }
 
-func atualizarEstatisticas(content *fyne.Container, cityID *uint) {
+func atualizarEstatisticas(user *modelos.Usuario, content *fyne.Container, cityID *uint) {
 	content.Objects = nil
 	content.Add(widget.NewLabelWithStyle("Resultados dos Candidatos", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
 
-	votes, _ := gerenciador.GetCandidateVotes(cityID)
+	votes, err := gerenciador.GetCandidateVotes(user, cityID)
+	if err != nil {
+		content.Add(widget.NewLabel("Erro ao carregar estatísticas: " + err.Error()))
+		content.Refresh()
+		return
+	}
+
 	for nome, count := range votes {
 		texto := fmt.Sprintf("%s: %d votos", nome, count)
 		content.Add(widget.NewLabel(texto))
@@ -487,7 +532,7 @@ func atualizarEstatisticas(content *fyne.Container, cityID *uint) {
 	content.Add(widget.NewSeparator())
 	content.Add(widget.NewLabelWithStyle("Resultados das Perguntas", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
 
-	qStats, _ := gerenciador.GetQuestionStats(cityID)
+	qStats, _ := gerenciador.GetQuestionStats(user, cityID)
 	for texto, stats := range qStats {
 		res := fmt.Sprintf("%s\nSim: %d | Não: %d", texto, stats["Sim"], stats["Não"])
 		content.Add(widget.NewLabel(res))

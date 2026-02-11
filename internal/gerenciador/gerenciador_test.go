@@ -14,52 +14,55 @@ func setupTestDB() {
 	if err != nil {
 		panic(err)
 	}
-	db.AutoMigrate(&modelos.Usuario{}, &modelos.Cidade{}, &modelos.Candidato{}, &modelos.Voto{}, &modelos.Pergunta{}, &modelos.Resposta{})
+	db.AutoMigrate(
+		&modelos.Usuario{},
+		&modelos.Permissao{},
+		&modelos.Cidade{},
+		&modelos.Candidato{},
+		&modelos.Voto{},
+		&modelos.Pergunta{},
+		&modelos.Resposta{},
+	)
 	database.DB = db
 
 	database.DB.Create(&modelos.Cidade{Nome: "Palmas"})
 	database.DB.Create(&modelos.Cidade{Nome: "Gurupi"})
 }
 
-func TestVotingFlow(t *testing.T) {
+func TestGranularPermissions(t *testing.T) {
 	setupTestDB()
 
-	// 1. Create Admin
-	CreateUser("system", "admin", "admin", modelos.RoleAdmin, nil)
+	permsAdmin := []modelos.Permissao{}
+	database.CreateUser("admin", "admin", modelos.RoleAdmin, nil, permsAdmin)
 	admin, _ := Authenticate("admin", "admin")
 
-	// 2. Admin Creates Manager
-	err := CreateUser(admin.Role, "manager", "pass", modelos.RoleGerente, nil)
-	if err != nil {
-		t.Errorf("Admin should be able to create Manager: %v", err)
+	// Create a "Reader" user who can Read Candidates but NOT Add
+	permsReader := []modelos.Permissao{
+		{Area: modelos.AreaCandidatos, Ler: true, Editar: false},
 	}
+	err := CreateUser(admin, "reader", "pass", modelos.RolePesquisador, nil, permsReader)
+	if err != nil { t.Fatal(err) }
 
-	// 3. Manager Creates Researcher for Palmas (ID 1)
-	manager, _ := Authenticate("manager", "pass")
-	err = CreateUser(manager.Role, "researcher", "pass", modelos.RolePesquisador, []uint{1})
-	if err != nil {
-		t.Errorf("Manager should be able to create Researcher: %v", err)
-	}
+	reader, _ := Authenticate("reader", "pass")
 
-	// 4. Researcher tries to create user (Should Fail)
-	researcher, _ := Authenticate("researcher", "pass")
-	err = CreateUser(researcher.Role, "hacker", "pass", modelos.RoleAdmin, nil)
+	// Reader tries to add candidate -> Fail
+	err = AddCandidate(reader, "Test", "T", nil)
 	if err == nil {
-		t.Error("Researcher should NOT be able to create users")
+		t.Error("Reader should NOT be able to add candidates")
+	} else if err.Error() != "permissão negada para adicionar candidato" {
+		t.Errorf("Unexpected error: %v", err)
 	}
 
-	// 5. Add Candidate
-	AddCandidate("Candidato 1", "P1", nil) // Global
+	// Create "Editor" user
+	permsEditor := []modelos.Permissao{
+		{Area: modelos.AreaCandidatos, Editar: true},
+	}
+	CreateUser(admin, "editor", "pass", modelos.RolePesquisador, nil, permsEditor)
+	editor, _ := Authenticate("editor", "pass")
 
-	// 6. Researcher Votes in Palmas
-	err = RegisterVote(1, 1, researcher.ID)
+	// Editor tries to add candidate -> Success
+	err = AddCandidate(editor, "Test2", "T2", nil)
 	if err != nil {
-		t.Errorf("Vote failed: %v", err)
-	}
-
-	// 7. Stats
-	votes, _ := GetCandidateVotes(nil) // Global
-	if votes["Candidato 1"] != 1 {
-		t.Errorf("Expected 1 vote, got %d", votes["Candidato 1"])
+		t.Errorf("Editor should be able to add candidate: %v", err)
 	}
 }

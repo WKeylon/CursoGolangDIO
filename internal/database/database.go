@@ -20,6 +20,7 @@ func InitDB() {
 
 	err = DB.AutoMigrate(
 		&modelos.Usuario{},
+		&modelos.Permissao{},
 		&modelos.Cidade{},
 		&modelos.Candidato{},
 		&modelos.Pergunta{},
@@ -65,7 +66,7 @@ func Seed() {
 }
 
 // User Functions
-func CreateUser(username, password, role string, cityIDs []uint) error {
+func CreateUser(username, password, role string, cityIDs []uint, permissions []modelos.Permissao) error {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
@@ -76,6 +77,7 @@ func CreateUser(username, password, role string, cityIDs []uint) error {
 		SenhaHash:      string(hash),
 		Role:           role,
 		PrimeiroAcesso: true,
+		Permissoes:     permissions,
 	}
 
 	// Add cities
@@ -90,7 +92,7 @@ func CreateUser(username, password, role string, cityIDs []uint) error {
 
 func GetUserByUsername(username string) (*modelos.Usuario, error) {
 	var user modelos.Usuario
-	err := DB.Preload("Cidades").First(&user, "username = ?", username).Error
+	err := DB.Preload("Cidades").Preload("Permissoes").First(&user, "username = ?", username).Error
 	return &user, err
 }
 
