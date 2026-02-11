@@ -1,76 +1,164 @@
 package gerenciador
 
 import (
+	"errors"
+	"pesquisa-eleitoral/internal/database"
 	"pesquisa-eleitoral/internal/modelos"
+	"golang.org/x/crypto/bcrypt"
 )
 
-type Gerenciador struct {
-	sistema    *modelos.SistemaEleitoral
-	nextCandID int
-	nextPergID int
-}
-
-func NovoGerenciador() *Gerenciador {
-	return &Gerenciador{
-		sistema: &modelos.SistemaEleitoral{
-			Candidatos: []*modelos.Candidato{},
-			Perguntas:  []*modelos.Pergunta{},
-		},
-		nextCandID: 1,
-		nextPergID: 1,
+// Authenticate checks username and password
+func Authenticate(username, password string) (*modelos.Usuario, error) {
+	var user modelos.Usuario
+	err := database.DB.Preload("Cidades").Where("username = ?", username).First(&user).Error
+	if err != nil {
+		return nil, errors.New("usuário não encontrado")
 	}
-}
 
-func (g *Gerenciador) AdicionarCandidato(nome, partido string) *modelos.Candidato {
-	c := &modelos.Candidato{
-		ID:      g.nextCandID,
-		Nome:    nome,
-		Partido: partido,
-		Votos:   0,
+	err = bcrypt.CompareHashAndPassword([]byte(user.SenhaHash), []byte(password))
+	if err != nil {
+		return nil, errors.New("senha incorreta")
 	}
-	g.sistema.Candidatos = append(g.sistema.Candidatos, c)
-	g.nextCandID++
-	return c
+
+	return &user, nil
 }
 
-func (g *Gerenciador) AdicionarPergunta(texto string) *modelos.Pergunta {
-	p := &modelos.Pergunta{
-		ID:    g.nextPergID,
-		Texto: texto,
-		Sim:   0,
-		Nao:   0,
+// CreateUser creates a new user with role validation
+func CreateUser(creatorRole string, username, password, role string, cityIDs []uint) error {
+	// Simple validation rules
+	if creatorRole == modelos.RolePesquisador {
+		return errors.New("pesquisadores não podem criar usuários")
 	}
-	g.sistema.Perguntas = append(g.sistema.Perguntas, p)
-	g.nextPergID++
-	return p
+
+	if creatorRole == modelos.RoleGerente && role != modelos.RolePesquisador {
+		return errors.New("gerentes só podem criar pesquisadores")
+	}
+
+	return database.CreateUser(username, password, role, cityIDs)
 }
 
-func (g *Gerenciador) RegistrarVotoCandidato(id int) {
-	for _, c := range g.sistema.Candidatos {
-		if c.ID == id {
-			c.Votos++
-			break
+// ChangePassword changes the user's password
+func ChangePassword(userID uint, newPassword string) error {
+	return database.UpdatePassword(userID, newPassword)
+}
+
+// ListUsers lists all users
+func ListUsers() ([]modelos.Usuario, error) {
+	return database.GetAllUsers()
+}
+
+// GetCities returns all cities
+func GetCities() ([]modelos.Cidade, error) {
+	return database.GetAllCities()
+}
+
+// --- Voting Logic ---
+
+func AddCandidate(name, party string, cityID *uint) error {
+	candidate := modelos.Candidato{
+		Nome:     name,
+		Partido:  party,
+		CidadeID: cityID,
+	}
+	return database.DB.Create(&candidate).Error
+}
+
+func AddQuestion(text string) error {
+	question := modelos.Pergunta{
+		Texto: text,
+	}
+	return database.DB.Create(&question).Error
+}
+
+func ListCandidates(cityID uint) ([]modelos.Candidato, error) {
+	var candidates []modelos.Candidato
+	// List candidates specific to the city OR global (null cityID)
+	// Important: We need to filter by CidadeID = ? OR CidadeID IS NULL
+	err := database.DB.Where("cidade_id = ? OR cidade_id IS NULL", cityID).Find(&candidates).Error
+	return candidates, err
+}
+
+func ListQuestions() ([]modelos.Pergunta, error) {
+	var questions []modelos.Pergunta
+	err := database.DB.Find(&questions).Error
+	return questions, err
+}
+
+func RegisterVote(candidateID, cityID, userID uint) error {
+	vote := modelos.Voto{
+		CandidatoID: candidateID,
+		CidadeID:    cityID,
+		UsuarioID:   userID,
+	}
+	return database.DB.Create(&vote).Error
+}
+
+func RegisterAnswer(questionID, cityID, userID uint, answer bool) error {
+	resp := modelos.Resposta{
+		PerguntaID: questionID,
+		Sim:        answer,
+		CidadeID:   cityID,
+		UsuarioID:  userID,
+	}
+	return database.DB.Create(&resp).Error
+}
+
+// Statistics
+
+func GetCandidateVotes(cityID *uint) (map[string]int64, error) {
+	type Result struct {
+		Nome  string
+		Total int64
+	}
+	var results []Result
+
+	query := database.DB.Table("votos").
+		Select("candidatos.nome as nome, count(votos.id) as total").
+		Joins("left join candidatos on candidatos.id = votos.candidato_id")
+
+	if cityID != nil {
+		query = query.Where("votos.cidade_id = ?", *cityID)
+	}
+
+	err := query.Group("candidatos.nome").Scan(&results).Error
+	if err != nil {
+		return nil, err
+	}
+
+	stats := make(map[string]int64)
+	for _, r := range results {
+		stats[r.Nome] = r.Total
+	}
+	return stats, nil
+}
+
+func GetQuestionStats(cityID *uint) (map[string]map[string]int64, error) {
+	var questions []modelos.Pergunta
+	if err := database.DB.Find(&questions).Error; err != nil {
+		return nil, err
+	}
+
+	stats := make(map[string]map[string]int64)
+
+	for _, q := range questions {
+		var simCount int64
+		var naoCount int64
+
+		qSim := database.DB.Model(&modelos.Resposta{}).Where("pergunta_id = ? AND sim = ?", q.ID, true)
+		qNao := database.DB.Model(&modelos.Resposta{}).Where("pergunta_id = ? AND sim = ?", q.ID, false)
+
+		if cityID != nil {
+			qSim = qSim.Where("cidade_id = ?", *cityID)
+			qNao = qNao.Where("cidade_id = ?", *cityID)
+		}
+
+		qSim.Count(&simCount)
+		qNao.Count(&naoCount)
+
+		stats[q.Texto] = map[string]int64{
+			"Sim": simCount,
+			"Não": naoCount,
 		}
 	}
-}
-
-func (g *Gerenciador) RegistrarRespostaPergunta(id int, respostaSim bool) {
-	for _, p := range g.sistema.Perguntas {
-		if p.ID == id {
-			if respostaSim {
-				p.Sim++
-			} else {
-				p.Nao++
-			}
-			break
-		}
-	}
-}
-
-func (g *Gerenciador) ListarCandidatos() []*modelos.Candidato {
-	return g.sistema.Candidatos
-}
-
-func (g *Gerenciador) ListarPerguntas() []*modelos.Pergunta {
-	return g.sistema.Perguntas
+	return stats, nil
 }

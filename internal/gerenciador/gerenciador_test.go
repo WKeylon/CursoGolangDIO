@@ -1,29 +1,65 @@
 package gerenciador
 
 import (
+	"pesquisa-eleitoral/internal/database"
+	"pesquisa-eleitoral/internal/modelos"
 	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
-func TestGerenciador(t *testing.T) {
-	g := NovoGerenciador()
+func setupTestDB() {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		panic(err)
+	}
+	db.AutoMigrate(&modelos.Usuario{}, &modelos.Cidade{}, &modelos.Candidato{}, &modelos.Voto{}, &modelos.Pergunta{}, &modelos.Resposta{})
+	database.DB = db
 
-	c := g.AdicionarCandidato("Alice", "Party A")
-	if c.ID != 1 || c.Nome != "Alice" {
-		t.Errorf("Expected candidate Alice with ID 1, got %v", c)
+	database.DB.Create(&modelos.Cidade{Nome: "Palmas"})
+	database.DB.Create(&modelos.Cidade{Nome: "Gurupi"})
+}
+
+func TestVotingFlow(t *testing.T) {
+	setupTestDB()
+
+	// 1. Create Admin
+	CreateUser("system", "admin", "admin", modelos.RoleAdmin, nil)
+	admin, _ := Authenticate("admin", "admin")
+
+	// 2. Admin Creates Manager
+	err := CreateUser(admin.Role, "manager", "pass", modelos.RoleGerente, nil)
+	if err != nil {
+		t.Errorf("Admin should be able to create Manager: %v", err)
 	}
 
-	p := g.AdicionarPergunta("Is it sunny?")
-	if p.ID != 1 || p.Texto != "Is it sunny?" {
-		t.Errorf("Expected question Is it sunny? with ID 1, got %v", p)
+	// 3. Manager Creates Researcher for Palmas (ID 1)
+	manager, _ := Authenticate("manager", "pass")
+	err = CreateUser(manager.Role, "researcher", "pass", modelos.RolePesquisador, []uint{1})
+	if err != nil {
+		t.Errorf("Manager should be able to create Researcher: %v", err)
 	}
 
-	g.RegistrarVotoCandidato(1)
-	if g.ListarCandidatos()[0].Votos != 1 {
-		t.Errorf("Expected 1 vote for candidate, got %d", g.ListarCandidatos()[0].Votos)
+	// 4. Researcher tries to create user (Should Fail)
+	researcher, _ := Authenticate("researcher", "pass")
+	err = CreateUser(researcher.Role, "hacker", "pass", modelos.RoleAdmin, nil)
+	if err == nil {
+		t.Error("Researcher should NOT be able to create users")
 	}
 
-	g.RegistrarRespostaPergunta(1, true)
-	if g.ListarPerguntas()[0].Sim != 1 {
-		t.Errorf("Expected 1 Sim for question, got %d", g.ListarPerguntas()[0].Sim)
+	// 5. Add Candidate
+	AddCandidate("Candidato 1", "P1", nil) // Global
+
+	// 6. Researcher Votes in Palmas
+	err = RegisterVote(1, 1, researcher.ID)
+	if err != nil {
+		t.Errorf("Vote failed: %v", err)
+	}
+
+	// 7. Stats
+	votes, _ := GetCandidateVotes(nil) // Global
+	if votes["Candidato 1"] != 1 {
+		t.Errorf("Expected 1 vote, got %d", votes["Candidato 1"])
 	}
 }
