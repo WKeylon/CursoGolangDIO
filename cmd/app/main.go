@@ -6,10 +6,13 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"image/color"
 	"pesquisa-eleitoral/internal/database"
 	"pesquisa-eleitoral/internal/gerenciador"
 	"pesquisa-eleitoral/internal/modelos"
@@ -21,6 +24,8 @@ var myWindow fyne.Window
 func main() {
 	database.InitDB()
 	myApp = app.New()
+	myApp.Settings().SetTheme(&myTheme{}) // Apply Custom Theme
+
 	myWindow = myApp.NewWindow("Sistema de Pesquisa Eleitoral")
 	myWindow.Resize(fyne.NewSize(450, 750))
 
@@ -37,6 +42,8 @@ func showLogin() {
 
 	statusLabel := widget.NewLabel("")
 	statusLabel.Alignment = fyne.TextAlignCenter
+	statusLabel.TextStyle = fyne.TextStyle{Italic: true}
+	statusLabel.Refresh()
 
 	loginBtn := widget.NewButton("Entrar", func() {
 		user, err := gerenciador.Authenticate(userEntry.Text, passEntry.Text)
@@ -51,18 +58,29 @@ func showLogin() {
 			showMainApp(user)
 		}
 	})
+	loginBtn.Importance = widget.HighImportance // Primary color
 
-	content := container.NewVBox(
-		layout.NewSpacer(),
-		widget.NewLabelWithStyle("Login", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+	// Logo Placeholder (Icon)
+	logo := widget.NewIcon(theme.AccountIcon())
+	logo.SetMinSize(fyne.NewSize(64, 64))
+
+	cardContent := container.NewVBox(
+		container.NewCenter(logo),
+		widget.NewLabelWithStyle("Bem-vindo", fyne.TextAlignCenter, fyne.TextStyle{Bold: true, Monospace: false}),
+		widget.NewSeparator(),
 		userEntry,
 		passEntry,
-		statusLabel,
-		loginBtn,
 		layout.NewSpacer(),
+		loginBtn,
+		statusLabel,
 	)
 
-	myWindow.SetContent(container.NewCenter(content))
+	// A Card-like container for Login
+	loginCard := widget.NewCard("", "", cardContent)
+
+	centeredContent := container.NewCenter(container.New(layout.NewGridWrapLayout(fyne.NewSize(300, 350)), loginCard))
+
+	myWindow.SetContent(centeredContent)
 }
 
 func showChangePassword(user *modelos.Usuario) {
@@ -72,6 +90,7 @@ func showChangePassword(user *modelos.Usuario) {
 	confirmEntry.SetPlaceHolder("Confirmar Nova Senha")
 
 	statusLabel := widget.NewLabel("")
+	statusLabel.Alignment = fyne.TextAlignCenter
 
 	changeBtn := widget.NewButton("Alterar Senha", func() {
 		if passEntry.Text != confirmEntry.Text {
@@ -92,6 +111,7 @@ func showChangePassword(user *modelos.Usuario) {
 		dialog.ShowInformation("Sucesso", "Senha alterada com sucesso! Faça login novamente.", myWindow)
 		showLogin()
 	})
+	changeBtn.Importance = widget.HighImportance
 
 	content := container.NewVBox(
 		widget.NewLabelWithStyle("Trocar Senha (Primeiro Acesso)", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
@@ -101,28 +121,54 @@ func showChangePassword(user *modelos.Usuario) {
 		changeBtn,
 	)
 
-	myWindow.SetContent(container.NewCenter(content))
+	myWindow.SetContent(container.NewCenter(container.New(layout.NewGridWrapLayout(fyne.NewSize(300, 300)), widget.NewCard("", "", content))))
 }
 
 func showMainApp(user *modelos.Usuario) {
-	// --- Componentes da UI ---
+	// --- Custom Header ---
+	headerText := canvas.NewText("Pesquisa Eleitoral", color.White)
+	headerText.TextSize = 18
+	headerText.TextStyle = fyne.TextStyle{Bold: true}
+
+	userText := canvas.NewText(user.Username, color.White)
+	userText.TextSize = 14
+	userText.Alignment = fyne.TextAlignTrailing
+
+	logoutIcon := widget.NewButtonWithIcon("", theme.LogoutIcon(), func() {
+		showLogin()
+	})
+	logoutIcon.Importance = widget.LowImportance // Transparent-ish
+
+	headerBar := container.NewBorder(nil, nil,
+		container.NewHBox(widget.NewIcon(theme.HomeIcon()), container.NewCenter(headerText)),
+		container.NewHBox(container.NewCenter(userText), logoutIcon),
+	)
+
+	// Blue Background for Header
+	bgRect := canvas.NewRectangle(color.NRGBA{R: 0x00, G: 0x7B, B: 0xFF, A: 0xFF})
+	headerStack := container.NewStack(bgRect, container.NewPadded(headerBar))
+
+
+	// --- Content Areas ---
 
 	// Aba Votação
 	votacaoContent := container.NewVBox()
 	scrollVotacao := container.NewVScroll(votacaoContent)
 
-	// Aba Administração (Visível apenas se tiver permissão)
+	// Aba Administração
 	var adminTab *container.TabItem
 	if gerenciador.CheckPermission(user, modelos.AreaCandidatos, "editar") || gerenciador.CheckPermission(user, modelos.AreaPerguntas, "editar") {
 		adminContent := createAdminContent(user)
 		adminTab = container.NewTabItem("Administração", adminContent)
+		adminTab.Icon = theme.SettingsIcon()
 	}
 
-	// Aba Usuários (Visível apenas se tiver permissão)
+	// Aba Usuários
 	var usersTab *container.TabItem
 	if gerenciador.CheckPermission(user, modelos.AreaUsuarios, "ler") || gerenciador.CheckPermission(user, modelos.AreaUsuarios, "editar") {
 		usersContent := createUsersContent(user)
 		usersTab = container.NewTabItem("Usuários", usersContent)
+		usersTab.Icon = theme.AccountIcon()
 	}
 
 	// Aba Estatísticas
@@ -137,18 +183,19 @@ func showMainApp(user *modelos.Usuario) {
 			nil, nil, nil,
 			statsScroll,
 		))
+		statsTab.Icon = theme.InfoIcon()
 	}
 
-	// Se pesquisador/votante, update screen
 	updateVotingScreen(user, votacaoContent)
 
 	// Configurar Abas
 	tabs := container.NewAppTabs()
+	tabs.SetTabLocation(container.TabLocationBottom) // Bottom Navigation for Mobile feel
 
-	// Adiciona abas conforme permissão
-	// Votação: Se tiver permissão de editar (votar)
 	if gerenciador.CheckPermission(user, modelos.AreaVotacao, "editar") {
-		tabs.Append(container.NewTabItem("Votação", scrollVotacao))
+		vTab := container.NewTabItem("Votação", scrollVotacao)
+		vTab.Icon = theme.ConfirmIcon()
+		tabs.Append(vTab)
 	}
 
 	if statsTab != nil {
@@ -161,26 +208,12 @@ func showMainApp(user *modelos.Usuario) {
 		tabs.Append(usersTab)
 	}
 
-	logoutBtn := widget.NewButton("Sair", func() {
-		showLogin()
-	})
-
-	topBar := container.NewHBox(
-		widget.NewLabel("Usuário: "+user.Username+" ("+user.Role+")"),
-		layout.NewSpacer(),
-		logoutBtn,
-	)
-
-	mainContainer := container.NewBorder(
-		topBar,
-		nil, nil, nil,
-		tabs,
-	)
-
+	// Main Layout
+	mainContainer := container.NewBorder(headerStack, nil, nil, nil, tabs)
 	myWindow.SetContent(mainContainer)
 }
 
-// --- Funções Auxiliares de UI ---
+// --- UI Helpers ---
 
 func updateVotingScreen(user *modelos.Usuario, content *fyne.Container) {
 	content.Objects = nil
@@ -191,7 +224,6 @@ func updateVotingScreen(user *modelos.Usuario, content *fyne.Container) {
 		return
 	}
 
-	// Mapa de Cidades permitidas
 	cityMap := make(map[string]uint)
 	cityOptions := []string{}
 
@@ -209,12 +241,12 @@ func updateVotingScreen(user *modelos.Usuario, content *fyne.Container) {
 	}
 
 	if len(cityOptions) == 0 {
-		content.Add(widget.NewLabel("Nenhuma cidade disponível para este usuário."))
+		content.Add(widget.NewCard("Aviso", "Nenhuma cidade disponível.", nil))
 		content.Refresh()
 		return
 	}
 
-	selectLabel := widget.NewLabel("Selecione a Cidade de Pesquisa:")
+	selectLabel := widget.NewLabel("Cidade de Pesquisa:")
 	var selectedCityID uint
 
 	citySelect := widget.NewSelect(cityOptions, func(s string) {
@@ -222,10 +254,10 @@ func updateVotingScreen(user *modelos.Usuario, content *fyne.Container) {
 		loadVotingForm(user, selectedCityID, content)
 	})
 
-	content.Add(selectLabel)
-	content.Add(citySelect)
+	// Card for City Selection
+	cityCard := widget.NewCard("", "", container.NewVBox(selectLabel, citySelect))
+	content.Add(cityCard)
 
-	// Se só tiver uma cidade, seleciona automaticamente
 	if len(cityOptions) == 1 {
 		citySelect.SetSelected(cityOptions[0])
 	}
@@ -233,21 +265,20 @@ func updateVotingScreen(user *modelos.Usuario, content *fyne.Container) {
 }
 
 func loadVotingForm(user *modelos.Usuario, cityID uint, content *fyne.Container) {
-	// Remove objects safely (Keep first 2: Label + Select)
-	if len(content.Objects) > 2 {
-		content.Objects = content.Objects[:2]
+	// Preserve City Selection Card (Index 0)
+	if len(content.Objects) > 1 {
+		content.Objects = content.Objects[:1]
 	}
-
-	content.Add(widget.NewSeparator())
-	content.Add(widget.NewLabelWithStyle("Candidatos", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
 
 	candidates, err := gerenciador.ListCandidates(cityID)
 	if err != nil {
 		log.Println("Erro ao listar candidatos:", err)
 	}
 
+	formContainer := container.NewVBox()
+
 	if len(candidates) == 0 {
-		content.Add(widget.NewLabel("Nenhum candidato cadastrado para esta cidade."))
+		formContainer.Add(widget.NewLabel("Nenhum candidato cadastrado."))
 	} else {
 		grupoCandidatos := widget.NewRadioGroup([]string{}, func(s string) {})
 		candidatosMap := make(map[string]uint)
@@ -259,26 +290,26 @@ func loadVotingForm(user *modelos.Usuario, cityID uint, content *fyne.Container)
 			candidatosMap[label] = c.ID
 		}
 		grupoCandidatos.Options = opcoes
-		content.Add(grupoCandidatos)
 
-		content.Add(widget.NewSeparator())
-		content.Add(widget.NewLabelWithStyle("Perguntas", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
+		candCard := widget.NewCard("Candidatos", "Selecione um candidato", grupoCandidatos)
+		formContainer.Add(candCard)
 
 		questions, _ := gerenciador.ListQuestions()
 		respostas := make(map[uint]bool)
 
+		questContainer := container.NewVBox()
 		for _, p := range questions {
 			pID := p.ID
-			label := widget.NewLabel(p.Texto)
-
 			rg := widget.NewRadioGroup([]string{"Sim", "Não"}, func(s string) {
 				respostas[pID] = (s == "Sim")
 			})
 			rg.Horizontal = true
 
-			content.Add(label)
-			content.Add(rg)
+			qCard := widget.NewCard(p.Texto, "", rg)
+			questContainer.Add(qCard)
 		}
+
+		formContainer.Add(widget.NewCard("Perguntas", "Responda abaixo", questContainer))
 
 		confirmarBtn := widget.NewButton("CONFIRMAR VOTO", func() {
 			sel := grupoCandidatos.Selected
@@ -305,17 +336,18 @@ func loadVotingForm(user *modelos.Usuario, cityID uint, content *fyne.Container)
 			dialog.ShowInformation("Sucesso", "Voto registrado!", myWindow)
 			loadVotingForm(user, cityID, content)
 		})
+		confirmarBtn.Importance = widget.HighImportance
 
-		content.Add(widget.NewSeparator())
-		content.Add(confirmarBtn)
+		formContainer.Add(container.NewPadded(confirmarBtn))
 	}
+
+	content.Add(formContainer)
 	content.Refresh()
 }
 
 func createAdminContent(user *modelos.Usuario) *fyne.Container {
-	// Formulário para adicionar Candidato
 	nomeEntry := widget.NewEntry()
-	nomeEntry.SetPlaceHolder("Nome do Candidato")
+	nomeEntry.SetPlaceHolder("Nome")
 	partidoEntry := widget.NewEntry()
 	partidoEntry.SetPlaceHolder("Partido")
 
@@ -336,7 +368,7 @@ func createAdminContent(user *modelos.Usuario) *fyne.Container {
 	addCandidatoBtn := widget.NewButton("Salvar Candidato", func() {
 		if nomeEntry.Text != "" && partidoEntry.Text != "" {
 			selectedCity := citySelect.Selected
-			cID := cityIDMap[selectedCity] // nil se vazio ou Global
+			cID := cityIDMap[selectedCity]
 
 			err := gerenciador.AddCandidate(user, nomeEntry.Text, partidoEntry.Text, cID)
 			if err != nil {
@@ -351,6 +383,7 @@ func createAdminContent(user *modelos.Usuario) *fyne.Container {
 			dialog.ShowInformation("Erro", "Preencha Nome e Partido", myWindow)
 		}
 	})
+	addCandidatoBtn.Importance = widget.HighImportance
 
 	if !gerenciador.CheckPermission(user, modelos.AreaCandidatos, "editar") {
 		addCandidatoBtn.Disable()
@@ -369,22 +402,16 @@ func createAdminContent(user *modelos.Usuario) *fyne.Container {
 			}
 		}
 	})
+	addPerguntaBtn.Importance = widget.HighImportance
 
 	if !gerenciador.CheckPermission(user, modelos.AreaPerguntas, "editar") {
 		addPerguntaBtn.Disable()
 	}
 
-	return container.NewVBox(
-		widget.NewLabelWithStyle("Adicionar Candidato", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nomeEntry,
-		partidoEntry,
-		citySelect,
-		addCandidatoBtn,
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Adicionar Pergunta (Sim/Não)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		perguntaEntry,
-		addPerguntaBtn,
-	)
+	candCard := widget.NewCard("Adicionar Candidato", "", container.NewVBox(nomeEntry, partidoEntry, citySelect, addCandidatoBtn))
+	pergCard := widget.NewCard("Adicionar Pergunta", "", container.NewVBox(perguntaEntry, addPerguntaBtn))
+
+	return container.NewVBox(candCard, pergCard)
 }
 
 func createUsersContent(user *modelos.Usuario) *fyne.Container {
@@ -402,7 +429,6 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 		roleSelect.SetSelected(modelos.RolePesquisador)
 	}
 
-	// City Multi-Selection
 	cities, _ := gerenciador.GetCities()
 	selectedCities := make(map[uint]bool)
 
@@ -417,14 +443,13 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 	cityScroll := container.NewVScroll(cityChecks)
 	cityScroll.SetMinSize(fyne.NewSize(0, 100))
 
-	// Permission Matrix
 	areas := []string{modelos.AreaCandidatos, modelos.AreaPerguntas, modelos.AreaUsuarios, modelos.AreaEstatisticas, modelos.AreaVotacao}
-	permMap := make(map[string]map[string]bool) // Area -> Action -> bool
+	permMap := make(map[string]map[string]bool)
 
 	permContainer := container.NewVBox(widget.NewLabelWithStyle("Permissões", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
 
 	for _, area := range areas {
-		area := area // Capture loop variable
+		area := area
 		permMap[area] = make(map[string]bool)
 
 		lbl := widget.NewLabel(area)
@@ -432,11 +457,10 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 		chkEdit := widget.NewCheck("Editar", func(b bool) { permMap[area]["editar"] = b })
 		chkDel := widget.NewCheck("Deletar", func(b bool) { permMap[area]["deletar"] = b })
 
-		// Default checks for convenience?
 		if area == modelos.AreaVotacao {
 			chkEdit.SetChecked(true)
 			permMap[area]["editar"] = true
-		} // Default voter
+		}
 
 		row := container.NewHBox(lbl, layout.NewSpacer(), chkLer, chkEdit, chkDel)
 		permContainer.Add(row)
@@ -448,7 +472,6 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 			return
 		}
 
-		// Coletar IDs selecionados
 		var cityIDs []uint
 		for id, selected := range selectedCities {
 			if selected {
@@ -456,7 +479,6 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 			}
 		}
 
-		// Collect Permissions
 		var permissions []modelos.Permissao
 		for area, actions := range permMap {
 			if actions["ler"] || actions["editar"] || actions["deletar"] {
@@ -473,12 +495,12 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 		if err != nil {
 			dialog.ShowError(err, myWindow)
 		} else {
-			dialog.ShowInformation("Sucesso", "Usuário criado com sucesso!", myWindow)
+			dialog.ShowInformation("Sucesso", "Usuário criado!", myWindow)
 			usernameEntry.SetText("")
 			passwordEntry.SetText("")
-			// Limpar checkboxes (TODO: Reset manual)
 		}
 	})
+	addUserBtn.Importance = widget.HighImportance
 
 	if !gerenciador.CheckPermission(user, modelos.AreaUsuarios, "editar") {
 		addUserBtn.Disable()
@@ -496,26 +518,20 @@ func createUsersContent(user *modelos.Usuario) *fyne.Container {
 		listContainer.Refresh()
 	})
 
-	return container.NewVBox(
-		widget.NewLabelWithStyle("Novo Usuário", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		usernameEntry,
-		passwordEntry,
-		widget.NewLabel("Função:"),
-		roleSelect,
-		widget.NewLabel("Cidades Permitidas:"),
-		cityScroll,
-		permContainer,
-		addUserBtn,
-		widget.NewSeparator(),
-		widget.NewLabelWithStyle("Usuários Existentes", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		refreshBtn,
-		container.NewVScroll(listContainer),
-	)
+	newUserCard := widget.NewCard("Novo Usuário", "", container.NewVBox(
+		usernameEntry, passwordEntry,
+		widget.NewLabel("Função:"), roleSelect,
+		widget.NewLabel("Cidades:"), cityScroll,
+		permContainer, addUserBtn,
+	))
+
+	listCard := widget.NewCard("Usuários Existentes", "", container.NewVBox(refreshBtn, container.NewVScroll(listContainer)))
+
+	return container.NewVBox(newUserCard, listCard)
 }
 
 func atualizarEstatisticas(user *modelos.Usuario, content *fyne.Container, cityID *uint) {
 	content.Objects = nil
-	content.Add(widget.NewLabelWithStyle("Resultados dos Candidatos", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
 
 	votes, err := gerenciador.GetCandidateVotes(user, cityID)
 	if err != nil {
@@ -524,18 +540,20 @@ func atualizarEstatisticas(user *modelos.Usuario, content *fyne.Container, cityI
 		return
 	}
 
+	cContainer := container.NewVBox()
 	for nome, count := range votes {
 		texto := fmt.Sprintf("%s: %d votos", nome, count)
-		content.Add(widget.NewLabel(texto))
+		cContainer.Add(widget.NewLabel(texto))
 	}
-
-	content.Add(widget.NewSeparator())
-	content.Add(widget.NewLabelWithStyle("Resultados das Perguntas", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
+	content.Add(widget.NewCard("Resultados: Candidatos", "", cContainer))
 
 	qStats, _ := gerenciador.GetQuestionStats(user, cityID)
+	qContainer := container.NewVBox()
 	for texto, stats := range qStats {
 		res := fmt.Sprintf("%s\nSim: %d | Não: %d", texto, stats["Sim"], stats["Não"])
-		content.Add(widget.NewLabel(res))
+		qContainer.Add(widget.NewLabel(res))
 	}
+	content.Add(widget.NewCard("Resultados: Perguntas", "", qContainer))
+
 	content.Refresh()
 }
