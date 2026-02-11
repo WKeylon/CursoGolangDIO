@@ -155,9 +155,12 @@ func showMainApp(user *modelos.Usuario) {
 	votacaoContent := container.NewVBox()
 	scrollVotacao := container.NewVScroll(votacaoContent)
 
+	// Role-Based Access Control + Granular Permissions
+	isAdminOrManager := user.Role == modelos.RoleAdmin || user.Role == modelos.RoleGerente
+
 	// Aba Administração
 	var adminTab *container.TabItem
-	if gerenciador.CheckPermission(user, modelos.AreaCandidatos, "editar") || gerenciador.CheckPermission(user, modelos.AreaPerguntas, "editar") {
+	if isAdminOrManager || gerenciador.CheckPermission(user, modelos.AreaCandidatos, "editar") || gerenciador.CheckPermission(user, modelos.AreaPerguntas, "editar") {
 		adminContent := createAdminContent(user)
 		adminTab = container.NewTabItem("Administração", adminContent)
 		adminTab.Icon = theme.SettingsIcon()
@@ -165,7 +168,7 @@ func showMainApp(user *modelos.Usuario) {
 
 	// Aba Usuários
 	var usersTab *container.TabItem
-	if gerenciador.CheckPermission(user, modelos.AreaUsuarios, "ler") || gerenciador.CheckPermission(user, modelos.AreaUsuarios, "editar") {
+	if isAdminOrManager || gerenciador.CheckPermission(user, modelos.AreaUsuarios, "ler") || gerenciador.CheckPermission(user, modelos.AreaUsuarios, "editar") {
 		usersContent := createUsersContent(user)
 		usersTab = container.NewTabItem("Usuários", usersContent)
 		usersTab.Icon = theme.AccountIcon()
@@ -173,7 +176,7 @@ func showMainApp(user *modelos.Usuario) {
 
 	// Aba Estatísticas
 	var statsTab *container.TabItem
-	if gerenciador.CheckPermission(user, modelos.AreaEstatisticas, "ler") {
+	if isAdminOrManager || gerenciador.CheckPermission(user, modelos.AreaEstatisticas, "ler") {
 		estatisticasContent := container.NewVBox()
 		statsScroll := container.NewVScroll(estatisticasContent)
 		atualizarEstatisticas(user, estatisticasContent, nil)
@@ -192,7 +195,7 @@ func showMainApp(user *modelos.Usuario) {
 	tabs := container.NewAppTabs()
 	tabs.SetTabLocation(container.TabLocationBottom) // Bottom Navigation for Mobile feel
 
-	if gerenciador.CheckPermission(user, modelos.AreaVotacao, "editar") {
+	if gerenciador.CheckPermission(user, modelos.AreaVotacao, "editar") || user.Role == modelos.RolePesquisador {
 		vTab := container.NewTabItem("Votação", scrollVotacao)
 		vTab.Icon = theme.ConfirmIcon()
 		tabs.Append(vTab)

@@ -25,6 +25,20 @@ func (m *myTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) col
 		return theme.DefaultTheme().Color(name, variant)
 	case theme.ColorNamePrimary:
 		return color.NRGBA{R: 0x00, G: 0x7B, B: 0xFF, A: 0xFF} // Blue
+	case theme.ColorNameButton:
+		return color.NRGBA{R: 0xE0, G: 0xE0, B: 0xE0, A: 0xFF} // Light Gray for secondary buttons
+	case theme.ColorNameDisabled:
+		return color.NRGBA{R: 0xCC, G: 0xCC, B: 0xCC, A: 0xFF}
+	case theme.ColorNameError:
+		return color.NRGBA{R: 0xDC, G: 0x35, B: 0x45, A: 0xFF} // Red
+	case theme.ColorNameSuccess:
+		return color.NRGBA{R: 0x28, G: 0xA7, B: 0x45, A: 0xFF} // Green
+	case theme.ColorNameSelection:
+		return color.NRGBA{R: 0x00, G: 0x7B, B: 0xFF, A: 0x40} // Light Blue for selection
+	case theme.ColorNameHover:
+		return color.NRGBA{R: 0xDD, G: 0xDD, B: 0xDD, A: 0xFF} // Light Gray for hover
+	case theme.ColorNameFocus:
+		return color.NRGBA{R: 0x00, G: 0x7B, B: 0xFF, A: 0x40} // Focus Ring (Light Blue)
 	case theme.ColorNameInputBackground:
 		if variant == theme.VariantLight {
 			return color.White
@@ -32,10 +46,6 @@ func (m *myTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) col
 		return theme.DefaultTheme().Color(name, variant)
 	case theme.ColorNamePlaceHolder:
 		return theme.DefaultTheme().Color(name, variant)
-	case theme.ColorNameButton:
-		return color.NRGBA{R: 0xE0, G: 0xE0, B: 0xE0, A: 0xFF} // Light Gray for secondary buttons
-	case theme.ColorNameDisabled:
-		return color.NRGBA{R: 0xCC, G: 0xCC, B: 0xCC, A: 0xFF}
 	case theme.ColorNameScrollBar:
 		return theme.DefaultTheme().Color(name, variant)
 	case theme.ColorNameShadow:
@@ -60,6 +70,10 @@ func (m *myTheme) Size(name fyne.ThemeSizeName) float32 {
 		return 8
 	case theme.SizeNameInlineIcon:
 		return 24
+	case theme.SizeNameScrollBar:
+		return 12
+	case theme.SizeNameScrollBarSmall:
+		return 4
 	}
 	return theme.DefaultTheme().Size(name)
 }
